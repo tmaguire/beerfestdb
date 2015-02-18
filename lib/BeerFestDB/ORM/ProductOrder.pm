@@ -81,12 +81,6 @@ __PACKAGE__->table("product_order");
   data_type: 'tinyint'
   is_nullable: 1
 
-=head2 is_sale_or_return
-
-  data_type: 'tinyint'
-  default_value: 0
-  is_nullable: 0
-
 =head2 comment
 
   data_type: 'text'
@@ -121,10 +115,10 @@ __PACKAGE__->add_columns(
   { data_type => "tinyint", is_nullable => 1 },
   "is_received",
   { data_type => "tinyint", is_nullable => 1 },
-  "is_sale_or_return",
-  { data_type => "tinyint", default_value => 0, is_nullable => 0 },
   "comment",
   { data_type => "text", is_nullable => 1 },
+  "is_sale_or_return",
+  { data_type => "tinyint", default_value => 0, is_nullable => 0 },
 );
 
 =head1 PRIMARY KEY

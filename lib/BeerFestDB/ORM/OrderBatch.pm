@@ -90,21 +90,6 @@ __PACKAGE__->add_unique_constraint("festival_order_batch", ["festival_id", "desc
 
 =head1 RELATIONS
 
-=head2 casks
-
-Type: has_many
-
-Related object: L<BeerFestDB::ORM::Cask>
-
-=cut
-
-__PACKAGE__->has_many(
-  "casks",
-  "BeerFestDB::ORM::Cask",
-  { "foreign.order_batch_id" => "self.order_batch_id" },
-  {},
-);
-
 =head2 festival_id
 
 Type: belongs_to

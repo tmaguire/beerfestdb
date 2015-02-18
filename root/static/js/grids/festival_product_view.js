@@ -143,31 +143,6 @@ Ext.onReady(function(){
         listClass:      'x-combo-list-small',
     });
 
-    /* Order batch drop-down */
-    var order_batch_store = new Ext.data.JsonStore({
-        url:        url_order_batch_list,
-        root:       'objects',
-        fields:     [{ name: 'order_batch_id', type: 'int' },
-                     { name: 'description',    type: 'string'}],
-        sortInfo:   {
-            field:     'description',
-            direction: 'ASC',
-        },
-    });
-    order_batch_store.load();
-    var order_batch_combo = new MyComboBox({
-        allowBlank:     true,
-        noSelection:    emptySelect,
-        typeAhead:      true,
-        triggerAction:  'all',
-        mode:           'local',
-        store:          order_batch_store,
-        valueField:     'order_batch_id',
-        displayField:   'description',
-        lazyRender:     true,
-        listClass:      'x-combo-list-small',
-    });
-
     /* Cask drop-down */
     var cask_store = new Ext.data.JsonStore({
         url:        url_cask_list,
