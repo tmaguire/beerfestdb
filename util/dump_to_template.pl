@@ -3,7 +3,7 @@
 # This file is part of BeerFestDB, a beer festival product management
 # system.
 # 
-# Copyright (C) 2010 Tim F. Rayner
+# Copyright (C) 2010-2013 Tim F. Rayner
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -24,22 +24,25 @@ use strict;
 use warnings;
 
 use Getopt::Long;
-use Config::YAML;
 use Pod::Usage;
+use Cwd;
 
 use BeerFestDB::ORM;
 use BeerFestDB::Dumper::Template;
+use BeerFestDB::Web;
 
 sub parse_args {
 
-    my ( $conffile, $templatefile, $logofile, $objectlevel, $want_help );
+    my ( $templatefile, $logofile, $objectlevel, $split, $outdir, $force, $want_help );
 
     GetOptions(
-        "c|config=s"   => \$conffile,
         "t|template=s" => \$templatefile,
         "l|logo=s"     => \$logofile,
         "o|objects=s"  => \$objectlevel,
         "h|help"       => \$want_help,
+        "s|split-output" => \$split,
+        "d|output-dir=s" => \$outdir,
+        "f|force-overwrite" => \$force,
     );
 
     if ($want_help) {
@@ -50,10 +53,10 @@ sub parse_args {
         );
     }
 
-    $conffile ||= 'beerfestdb_web.yml';
     $objectlevel ||= 'cask';
+    $outdir      ||= getcwd;
 
-    unless ( $conffile && $templatefile ) {
+    unless ( $templatefile ) {
         pod2usage(
             -message => qq{Please see "$0 -h" for further help notes.},
             -exitval => 255,
@@ -62,16 +65,16 @@ sub parse_args {
         );
     }
 
-    my $config = Config::YAML->new( config => $conffile );
+    my $config = BeerFestDB::Web->config();
 
-    return( $templatefile, $logofile, $config, $objectlevel );
+    return( $templatefile, $logofile, $config, $objectlevel, $outdir, $split, $force );
 }
 
 ########
 # MAIN #
 ########
 
-my ( $templatefile, $logofile, $config, $objectlevel ) = parse_args();
+my ( $templatefile, $logofile, $config, $objectlevel, $outdir, $split, $force ) = parse_args();
 
 my $schema = BeerFestDB::ORM->connect( @{ $config->{'Model::DB'}{'connect_info'} } );
 
@@ -80,6 +83,9 @@ my $dumper = BeerFestDB::Dumper::Template->new(
     template => $templatefile,
     logos    => [ $logofile ],
     dump_class => $objectlevel,
+    split_output => $split,
+    output_dir   => $outdir,
+    overwrite    => $force,
 );
 
 $dumper->dump();
@@ -92,7 +98,7 @@ dump_to_template.pl
 
 =head1 SYNOPSIS
 
- dump_to_template.pl -c <config file> -t <template file> -l <logo file>
+ dump_to_template.pl -t <template file> -l <logo file>
 
 =head1 DESCRIPTION
 
@@ -106,10 +112,6 @@ passed into the template.
 =head2 OPTIONS
 
 =over 2
-
-=item -c
-
-The main BeerFestDB web config file.
 
 =item -t
 
@@ -125,6 +127,19 @@ template file as the first element of the "logos" array.
 Indicate the database class to use for dumping. See
 L<BeerFestDB::Dumper::Template> for a list of acceptable options. The
 default is 'cask'.
+
+=item -d
+
+The output directory into which to write files.
+
+=item -s
+
+Generate output latex files split by the object level used for dumping
+(-o, above). The default behaviour is to write directly to STDOUT.
+
+=item -f
+
+Force overwriting of pre-existing output files when the -s option is used.
 
 =back
 

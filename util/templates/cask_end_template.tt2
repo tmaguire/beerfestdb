@@ -42,7 +42,7 @@
 
 % CAMRA logo (hardcoded)
 \begin{textblock}{0.01}(0.86,0.04)
-\includegraphics[width=30mm]{camra_logo.png}
+\includegraphics[width=30mm]{images/camra_logo.png}
 \end{textblock}
 
 % product info to be plugged in
@@ -108,7 +108,8 @@
 
   \begin{textblock}{0.8}[0.5, 0.5](0.5,0.50)
   \begin{center}
-  \textbf{[% cask.product | latexify %]}
+  \textbf{[% cask.product | latexify -%]
+  [%- IF cask.category == 'apple juice' %] APPLE JUICE[% END %]}
   \end{center}
 
   % \hspace{5mm} 0.0\%
@@ -116,7 +117,7 @@
   %\vspace{8mm}
   \end{textblock}
 
-[% ELSIF cask.category == 'mead' %]
+[% ELSIF cask.category == 'mead' || cask.category == 'wine' %]
 
   [% IF cask.product.length > 55 %]
     [% product_font_size = 48 %]
@@ -139,8 +140,7 @@
   \begin{center}
   \fontsize{[% product_font_size %]}{94}
   \selectfont
-  \textbf{[% cask.product | latexify -%]
-[%- IF cask.category == 'apple juice' %] APPLE JUICE[% END %]}
+  \textbf{[% cask.product | latexify %]}
   \end{center}
 
   % \hspace{5mm} 0.0\%
@@ -181,31 +181,26 @@
   \fontsize{48}{60}
   \selectfont
 
-[% IF cask.category == 'mead' %]
+[% IF cask.category == 'mead' || cask.category == 'wine' %]
 
-\begin{textblock}{0.3}(0.60,0.70)
-  [% IF cask.price == cask.half_price %]
-    \textbf{[% cask.price %]}
-  [% ELSE %]
-    \textbf{[% cask.currency | latexify -%]
-            [%- cask.price %]~per\\ [% cask.sale_volume %]}
-  [% END %]
+\begin{textblock}{0.3}(0.50,0.70)
+  \textbf{[% cask.currency | latexify -%]
+          [%- cask.price | price_format | format('%.2f') -%]/[% cask.sale_volume %]}
 \end{textblock}
 
 [% ELSE %]
 
-\begin{textblock}{0.4}(0.55,0.70)
-  [% IF cask.price == cask.half_price %]
-    \textbf{[% cask.price %]}
-  [% ELSE %]
+\begin{textblock}{0.4}(0.55,0.63)
 
   \textbf{[% cask.currency | latexify -%]
-          [%- cask.price      | format('%.2f') -%]/[% cask.sale_volume %]}
+          [%- cask.price | price_format | format('%.2f') -%]/[% cask.sale_volume %]}
 
   \textbf{[% cask.currency | latexify -%]
-          [%- cask.half_price | format('%.2f') -%]/half [% cask.sale_volume %]}
+          [%- cask.price | price_format(2) | format('%.2f') -%]/half [% cask.sale_volume %]}
 
-  [% END %]
+  \textbf{[% cask.currency | latexify -%]
+          [%- cask.price | price_format(3) | format('%.2f') -%]/third [% cask.sale_volume %]}
+
 \end{textblock}
 
 [% END %]

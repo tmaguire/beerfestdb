@@ -64,6 +64,11 @@ __PACKAGE__->table("product");
   data_type: 'text'
   is_nullable: 1
 
+=head2 long_description
+
+  data_type: 'text'
+  is_nullable: 1
+
 =head2 comment
 
   data_type: 'text'
@@ -85,6 +90,8 @@ __PACKAGE__->add_columns(
   "nominal_abv",
   { data_type => "decimal", is_nullable => 1, size => [3, 1] },
   "description",
+  { data_type => "text", is_nullable => 1 },
+  "long_description",
   { data_type => "text", is_nullable => 1 },
   "comment",
   { data_type => "text", is_nullable => 1 },
@@ -146,7 +153,22 @@ __PACKAGE__->has_many(
   "festival_products",
   "BeerFestDB::ORM::FestivalProduct",
   { "foreign.product_id" => "self.product_id" },
-  {},
+  undef,
+);
+
+=head2 product_allergens
+
+Type: has_many
+
+Related object: L<BeerFestDB::ORM::ProductAllergen>
+
+=cut
+
+__PACKAGE__->has_many(
+  "product_allergens",
+  "BeerFestDB::ORM::ProductAllergen",
+  { "foreign.product_id" => "self.product_id" },
+  undef,
 );
 
 =head2 product_category_id
@@ -175,7 +197,7 @@ __PACKAGE__->has_many(
   "product_characteristics",
   "BeerFestDB::ORM::ProductCharacteristic",
   { "foreign.product_id" => "self.product_id" },
-  {},
+  undef,
 );
 
 =head2 product_orders
@@ -190,7 +212,7 @@ __PACKAGE__->has_many(
   "product_orders",
   "BeerFestDB::ORM::ProductOrder",
   { "foreign.product_id" => "self.product_id" },
-  {},
+  undef,
 );
 
 =head2 product_style_id
@@ -208,13 +230,28 @@ __PACKAGE__->belongs_to(
 );
 
 
-# Created by DBIx::Class::Schema::Loader v0.07015 @ 2012-03-22 16:57:01
-# DO NOT MODIFY THIS OR ANYTHING ABOVE! md5sum:sKxoVjs5HPgWcOPUZMayag
+# Created by DBIx::Class::Schema::Loader v0.07042 @ 2015-02-01 13:24:04
+# DO NOT MODIFY THIS OR ANYTHING ABOVE! md5sum:57CSCEAcZVhS2cPHalHqbw
 
 
 # You can replace this text with custom content, and it will be preserved on regeneration
 __PACKAGE__->many_to_many(
     "festivals" => "festival_products", "festival_id"
+);
+
+__PACKAGE__->many_to_many(
+    "allergens_present" => "product_allergens", "product_allergen_type_id",
+    { where => { present => 1 } }, # FIXME untested
+);
+
+__PACKAGE__->many_to_many(
+    "allergens_absent" => "product_allergens", "product_allergen_type_id",
+    { where => { present => 0 } },
+);
+
+__PACKAGE__->many_to_many(
+    "allergens_unknown" => "product_allergens", "product_allergen_type_id",
+    { where => { present => undef } },
 );
 
 1;

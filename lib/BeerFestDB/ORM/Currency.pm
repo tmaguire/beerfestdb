@@ -103,19 +103,19 @@ __PACKAGE__->add_unique_constraint("currency_code", ["currency_code"]);
 
 =head1 RELATIONS
 
-=head2 casks
+=head2 cask_managements
 
 Type: has_many
 
-Related object: L<BeerFestDB::ORM::Cask>
+Related object: L<BeerFestDB::ORM::CaskManagement>
 
 =cut
 
 __PACKAGE__->has_many(
-  "casks",
-  "BeerFestDB::ORM::Cask",
+  "cask_managements",
+  "BeerFestDB::ORM::CaskManagement",
   { "foreign.currency_id" => "self.currency_id" },
-  {},
+  undef,
 );
 
 =head2 festival_entries
@@ -130,7 +130,7 @@ __PACKAGE__->has_many(
   "festival_entries",
   "BeerFestDB::ORM::FestivalEntry",
   { "foreign.currency_id" => "self.currency_id" },
-  {},
+  undef,
 );
 
 =head2 festival_products
@@ -145,7 +145,7 @@ __PACKAGE__->has_many(
   "festival_products",
   "BeerFestDB::ORM::FestivalProduct",
   { "foreign.sale_currency_id" => "self.currency_id" },
-  {},
+  undef,
 );
 
 =head2 product_orders
@@ -160,12 +160,12 @@ __PACKAGE__->has_many(
   "product_orders",
   "BeerFestDB::ORM::ProductOrder",
   { "foreign.currency_id" => "self.currency_id" },
-  {},
+  undef,
 );
 
 
-# Created by DBIx::Class::Schema::Loader v0.07015 @ 2012-03-22 16:57:01
-# DO NOT MODIFY THIS OR ANYTHING ABOVE! md5sum:kSQw+eOVsSV++z8NayTHug
+# Created by DBIx::Class::Schema::Loader v0.07039 @ 2014-07-20 17:33:21
+# DO NOT MODIFY THIS OR ANYTHING ABOVE! md5sum:YH8SpPH/vAd43vQ8UxMIlw
 
 
 # You can replace this text with custom content, and it will be preserved on regeneration

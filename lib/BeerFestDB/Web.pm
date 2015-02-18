@@ -36,7 +36,6 @@ use Catalyst::Runtime '5.70';
 
 use parent qw/Catalyst/;
 use Catalyst qw/ConfigLoader
-                Unicode::Encoding
                 Static::Simple
 
                 Session
@@ -64,8 +63,9 @@ __PACKAGE__->config(
     encoding     => 'UTF-8',
     session => { flash_to_stash => 1,
                  expires        => 3600, },
-    'View::JSON' => {
-        json_driver => 'JSON::DWIW', # Better utf-8 support than JSON(::XS)
+    'Plugin::Session' => {
+	storage => "/tmp/beerfestdb-$>/web/session_data",
+	unlink_on_exit => 1,
     },
     authentication => {  
         default_realm => 'beerfestdb',
@@ -94,6 +94,9 @@ __PACKAGE__->config(
 
 # Start the application
 __PACKAGE__->setup();
+
+# Turn off debug output unless we're really debugging.
+__PACKAGE__->log->levels( qw/info warn error fatal/ ) unless __PACKAGE__->debug;
 
 # Access control.
 foreach my $path ( qw(bar bayposition caskmeasurement cask company companyregion

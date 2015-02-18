@@ -27,6 +27,7 @@ Ext.onReady(function(){
     
     var Cask = Ext.data.Record.create([
         { name: 'cask_id',           type: 'int' },
+        { name: 'cask_management_id',  type: 'int' },
         { name: 'festival_id',       type: 'int' },
         { name: 'company_name',      type: 'string' },
         { name: 'product_name',      type: 'string' },
@@ -170,13 +171,14 @@ Ext.onReady(function(){
     ];
 
     function viewLink (grid, record, action, row, col) {
-        var t = new Ext.XTemplate('/cask/view/{cask_id}');
+        var t = new Ext.XTemplate(url_base + 'cask/view/{cask_id}');
         window.location=t.apply({cask_id: record.get('cask_id')});
     };
 
     function recordChanges (record) {
         var fields = record.getChanges();
         fields.cask_id = record.get( 'cask_id' );
+        fields.cask_management_id = record.get( 'cask_management_id' );
         return(fields);
     }
 
@@ -198,7 +200,7 @@ Ext.onReady(function(){
         ),
         tbar:
         [
-            { text: 'Home', handler: function() { window.location = '/'; } },
+            { text: 'Home', handler: function() { window.location = url_base; } },
             { text: 'Festival', handler: function() { window.location = url_festival_view; } },
         ],
     });

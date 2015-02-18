@@ -2,7 +2,7 @@
 # This file is part of BeerFestDB, a beer festival product management
 # system.
 # 
-# Copyright (C) 2010 Tim F. Rayner
+# Copyright (C) 2010-2013 Tim F. Rayner
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -32,8 +32,11 @@ use Carp;
 use Scalar::Util qw(looks_like_number);
 use List::Util qw(first);
 use Storable qw(dclone);
+use Cwd;
+use File::Spec::Functions qw(catfile);
 use Template;
 use POSIX qw(ceil);
+use utf8;
 
 our $VERSION = '0.01';
 
@@ -60,18 +63,56 @@ has 'dump_class'  => ( is       => 'ro',
                        required => 1,
                        default  => 'product' );
 
+has 'split_output' => ( is       => 'ro',
+                        isa      => 'Bool',
+                        required => 1,
+                        default  => 0 );
+
+has 'output_dir'  => ( is       => 'ro',
+                       isa      => 'Str',
+                       required => 1,
+                       default  => getcwd );
+
+has 'overwrite'   => ( is       => 'ro',
+                       isa      => 'Bool',
+                       required => 1,
+                       default  => 0 );
+
 sub BUILD {
 
     my ( $self, $params ) = @_;
 
     my $class = $params->{'dump_class'};
     if ( defined $class ) {
-        unless ( first { $class eq $_ } qw(cask gyle product product_order distributor) ) {
+        unless ( first { $class eq $_ } qw(cask cask_management gyle
+                                           product product_order distributor) ) {
             confess(qq{Error: Unsupported dump class "$class"});
         }
     }
 
+    my $outdir = $params->{'output_dir'};
+    if ( defined $params->{'filehandle'} && defined $params->{'split_output'} ) {
+
+        warn(q{Warning: filehandle attribute used in conjunction with split_output;} .
+             q{ this does not make sense. Script will ignore the filehandle.\n});
+    }
+
+    if ( defined $outdir && ! -e $outdir ) {
+        mkdir $outdir;
+    }
+
     return;
+}
+
+sub _sanitise_filename {
+
+    my ( $self, $tag ) = @_;
+
+    $tag =~ s/['"]//g;
+    $tag =~ s/\&/and/g;
+    $tag =~ s/[^[:alnum:]]+/_/g;
+
+    return $tag;
 }
 
 sub product_hash {
@@ -82,6 +123,10 @@ sub product_hash {
     my $fp   = $product->search_related('festival_products',
 					{ festival_id => $fest->festival_id })->first();
 
+    my $tag = $self->_sanitise_filename(sprintf("%s %s",
+                                                $product->company_id->name(),
+                                                $product->name()));
+
     # N.B. Changes here need to be documented in the POD.
     my %prodhash = (
         brewery  => $product->company_id->name(),
@@ -91,21 +136,22 @@ sub product_hash {
                     ? $product->product_style_id()->description() : q{},
         category => $product->product_category_id()->description(),
         abv      => $product->nominal_abv(),
-        sale_volume => $fp->sale_volume_id()->description(),
         notes    => $product->description(),
+        _split_export_tag => $tag,
     );
 
-    my $currency = $fp->sale_currency_id();
-    my $format   = $currency->currency_format();
-    $prodhash{currency} = $currency->currency_symbol();
+    if ( $fp ) {
+        $prodhash{sale_volume} = $fp->sale_volume_id()->description();
+        my $currency = $fp->sale_currency_id();
+        my $format   = $currency->currency_format();
+        $prodhash{currency} = $currency->currency_symbol();
 
-    $prodhash{price}   = $self->format_price( $fp->sale_price(), $format );
-    if ( looks_like_number( $prodhash{price} ) ) {
-        $prodhash{half_price}
-            = $self->format_price( ceil($fp->sale_price() / 2), $format );
-    }
-    else {
-        $prodhash{half_price} = $prodhash{price};
+        # The formatted_price option is great if you just want to display
+        # the price in the local format. However, if you need to do any
+        # calculations then use price and the price_format filter
+        # below. This reduces the risk of floating-point errors.
+        $prodhash{formatted_price} = $self->format_price( $fp->sale_price(), $format );
+        $prodhash{price} = $fp->sale_price(); # typically in pennies (GBP).
     }
 
     return \%prodhash;
@@ -126,6 +172,7 @@ sub order_hash {
         cask_count  => $order->cask_count(),
         is_sale_or_return => $order->is_sale_or_return(),
         nominal_abv => $order->product_id->nominal_abv(),
+        _split_export_tag => $order->product_order_id(),
     );
 
     my $currency = $order->currency_id();
@@ -157,11 +204,14 @@ sub distributor_hash {
     my $fest       = $self->festival();
     my $orderbatch = $self->order_batch();
 
+    my $tag = $self->_sanitise_filename(sprintf("%s %s", $orderbatch->description(), $dist->name()));
+
     my %disthash = (
         id         => $dist->id(),
         name       => $dist->name(),
         full_name  => $dist->full_name(),
         batch_id   => $orderbatch->id(),
+        _split_export_tag => $tag,
     );
 
     # Some distributor-level template dumps have no need for sales
@@ -198,6 +248,7 @@ sub update_gyle_hash {
 
     # N.B. Changes here need to be documented in the POD.
     $gylehash ||= {};
+    $gylehash->{_split_export_tag} = $gyle->gyle_id();
 
     # This potentially overwrites the "nominal" ABV from the product
     # table with the *actual* gyle ABV.
@@ -214,19 +265,35 @@ sub update_cask_hash {
 
     # N.B. Changes here need to be documented in the POD.
     $caskhash ||= {};
-    $caskhash->{number}      = $cask->internal_reference();
-    $caskhash->{festival_id} = $cask->cellar_reference();
-    $caskhash->{size}        = $cask->container_size_id
-          ? $cask->container_size_id->container_volume() : q{};
+    $caskhash->{_split_export_tag} = $cask->cask_id();
     $caskhash->{dips}         = $self->munge_dips( $cask );
     $caskhash->{comment}      = $cask->comment();
     $caskhash->{is_condemned} = $cask->is_condemned();
-    $caskhash->{is_sale_or_return} = $cask->is_sale_or_return();
-    $caskhash->{stillage_bay} = $cask->stillage_bay();
-    $caskhash->{bay_position} = $cask->bay_position_id
-	  ? $cask->bay_position_id->description() : q{};
 
     return $caskhash;
+}
+
+sub update_caskman_hash {
+
+    my ( $self, $caskmanhash, $caskman ) = @_;
+
+    # N.B. Changes here need to be documented in the POD.
+    $caskmanhash ||= {};
+    $caskmanhash->{_split_export_tag} = $caskman->cask_management_id();
+    $caskmanhash->{number}      = $caskman->internal_reference();
+    $caskmanhash->{festival_id} = $caskman->cellar_reference();
+    $caskmanhash->{size}        = $caskman->container_size_id
+          ? $caskman->container_size_id->container_volume() : q{};
+    $caskmanhash->{is_sale_or_return} = $caskman->is_sale_or_return();
+    $caskmanhash->{stillage_bay} = $caskman->stillage_bay();
+    $caskmanhash->{bay_position} = $caskman->bay_position_id
+	  ? $caskman->bay_position_id->description() : q{};
+    my $stillage_loc = $caskman->stillage_location_id();
+    $caskmanhash->{stillage_location} = $stillage_loc ? $stillage_loc->description() : q{};
+    $caskmanhash->{order_batch}  = $caskman->product_order_id
+  	  ? $caskman->product_order_id->order_batch_id->description() : 'Unknown';
+
+    return $caskmanhash;
 }
 
 sub dump {
@@ -240,12 +307,14 @@ sub dump {
                 $cask->gyle_id()->festival_product_id()->product_id()
             );
             $self->update_gyle_hash( $caskhash, $cask->gyle_id() );
+            $self->update_caskman_hash( $caskhash, $cask->cask_management_id() );
             $self->update_cask_hash( $caskhash, $cask );
 
             push @template_data, $caskhash;
 
-            my $stillage_name = $cask->stillage_location_id()
-                                ? $cask->stillage_location_id()->description() : '';
+            my $stillage_loc  = $cask->cask_management_id()->stillage_location_id();
+            my $stillage_name = $stillage_loc ? $stillage_loc->description() : q{};
+
             push @{ $stillage{ $stillage_name } }, $caskhash;
         }
 
@@ -256,6 +325,26 @@ sub dump {
         while ( my $batch = $batches->next() ) {
             push @dip_batches, { id   => $batch->id(),
                                  name => $batch->description() };
+        }
+    }
+    elsif ( $self->dump_class eq 'cask_management' ) {
+        foreach my $caskman ( @{ $self->festival_cask_managements() } ){
+            my $caskmanhash = {};
+            my ( $po, $casks );
+            if ( $po = $caskman->product_order_id() ) {
+                $caskmanhash = $self->product_hash(
+                    $po->product_id()
+                );
+            }
+            elsif ( $casks = $caskman->casks() ) { # Actually, There Can Be Only One...
+		my $cask = $casks->next();
+                $caskmanhash = $self->product_hash( $cask->gyle_id()->festival_product_id()->product_id() );
+                $self->update_cask_hash( $caskmanhash, $cask );
+            }
+
+            $self->update_caskman_hash( $caskmanhash, $caskman );
+
+            push @template_data, $caskmanhash;
         }
     }
     elsif ( $self->dump_class eq 'gyle' ) {
@@ -273,10 +362,11 @@ sub dump {
                 # For typical use-case this might be better done by bar rather than stillage FIXME.
                 my %stillage_seen;
                 STILLAGE:
-                foreach my $cask ( $gyle->search_related('casks',
-                                                         { festival_id => $self->festival->id() }) ) { 
-                    my $stillage_name = $cask->stillage_location_id()
-                        ? $cask->stillage_location_id()->description() : '';
+                foreach my $caskman ( $gyle->search_related('casks')
+                                           ->search_related('cask_management_id',
+                                                            { festival_id => $self->festival->id() }) ) { 
+                    my $stillage_name = $caskman->stillage_location_id()
+                        ? $caskman->stillage_location_id()->description() : '';
                     next STILLAGE if $stillage_seen{ $stillage_name }++;
                     push @{ $stillage{ $stillage_name } }, $gylehash;
                 }
@@ -296,7 +386,7 @@ sub dump {
         }
     }
     elsif ( $self->dump_class eq 'distributor' ) {
-        foreach my $dist ( @{ $self->festival_distributors() } ) {
+        foreach my $dist ( @{ $self->order_batch_distributors() } ) {
             my $disthash = $self->distributor_hash( $dist );
             push @template_data, $disthash;
         }
@@ -305,26 +395,85 @@ sub dump {
         confess(sprintf(qq{Attempt to dump data from unsupported class "%s"}, $self->dump_class));
     }
     
+    # We define some custom filters for convenience.
+    my $template = Template->new(
+	ABSOLUTE => 1,
+	FILTERS => {
+            titlecase => sub { join(' ', map { ucfirst $_ } split / +/, lc($_[0])) },
+            latexify  => \&filter_to_latex,
+            price_format => [ \&rounded_fraction_factory, 1 ],
+        }
+    )   or die( "Cannot create Template object: " . Template->error() );
+
     my $vars = {
         logos      => $self->logos(),
-        objects    => \@template_data,
         stillages  => \%stillage,
         dip_batches => \@dip_batches,
         dump_class => $self->dump_class(),
     };
 
-    # We define a custom title case filter for convenience.
-    my $template = Template->new(
-	FILTERS => {
-            titlecase => sub { join(' ', map { ucfirst $_ } split / +/, lc($_[0])) },
-            latexify  => \&filter_to_latex,
-        }
-    )   or die( "Cannot create Template object: " . Template->error() );
+    if ( $self->split_output() ) {
 
-    $template->process($self->template(), $vars, $self->filehandle() )
-        or die( "Template processing error: " . $template->error() );
+        ITEM:
+        foreach my $item ( @template_data ) {
+            my $export_filename = catfile($self->output_dir,
+                                          $item->{_split_export_tag} . ".tex");
+            if ( -e $export_filename && ! $self->overwrite ) {
+                warn("Output file already exists; will not overwrite. Skipping.\n");
+                next ITEM;
+            }
+            warn(sprintf("Creating output file for %s: %s\n",
+                         $self->dump_class(), $item->{_split_export_tag}));
+            open(my $export_fh, '>', $export_filename)
+                or die("Error: unable to open output file $export_filename.");
+            $vars->{'objects'} = [ $item ];
+            $template->process($self->template(), $vars, $export_fh )
+                or die( "Template processing error: " . $template->error() );
+            close($export_fh) or die("$!");
+        }
+    }
+    else {
+        $vars->{'objects'} = \@template_data,
+        $template->process($self->template(), $vars, $self->filehandle() )
+            or die( "Template processing error: " . $template->error() );
+    }
 
     return;
+}
+
+sub rounded_fraction_factory {
+
+    # Custom filter to take a fraction of a given price and round it
+    # to the nearest 1dp. This is a rather arbitrary threshold but
+    # works well for GBP. Note that this may well need fixing to
+    # support the full range of currency formats.
+
+    my ( $context, $by, $dp, $denom ) = @_;
+
+    # Price is typically given in pennies, we may want it in
+    # pounds. Using $denom=100 would work in such a case.
+
+    # Default settings just formats the price from pennies to pounds.
+    $by    ||= 1;
+    $denom ||= 100; # Good for GBP, USD and similar.
+    if ( ! defined $dp ) { $dp  = 1; } # can be zero
+
+    my $divisor = 10**(2-$dp);
+
+    return sub {
+
+        my ( $text ) = @_;
+
+        my $rounded;
+        if ( looks_like_number($text) ) {
+            $rounded = ceil($text / ( $by * $divisor )) / ( $denom / $divisor );
+        }
+        else {
+            return $text # pass-through text values.
+        }
+
+        return $rounded
+    }
 }
 
 sub filter_to_latex {
@@ -351,6 +500,10 @@ sub filter_to_latex {
     # beerfestdb_web.yml).
 
     # N.B. we're not covering capitals yet FIXME?
+
+    # Hex representations can be found by running e.g.:
+    #    printf "%x", ord('ç')
+    # (although make sure you 'use utf8' when doing so).
 
     # Grave accents.
     $text =~ s/ (?: à | \x{e0} ) /\\`{a}/gxms;
@@ -385,6 +538,8 @@ sub filter_to_latex {
     $text =~ s/ (?: ç  | \x{e7} ) /\\c{c}/gxms;
     $text =~ s/ (?: ß  | \x{df} ) /\\ss/gxms;
     $text =~ s/ (?: ø  | \x{f8} ) /\\o/gxms;
+    $text =~ s/ (?: π  | \x{3c0} ) /\$\\pi\$/gxms;
+    $text =~ s/ (?: °  | \x{b0} ) /\$\^\{\\circ\}\$/gxms;
 
     return $text;
 }
@@ -537,7 +692,13 @@ An arrayref containing logo file names to pass through to the templates.
 =item dump_class
 
 A string indicating the level at which to dump out data. Can be one of
-"cask", "gyle", "product" or "product_order".
+"cask", "cask_management", "gyle", "product", "product_order" or
+"distributor".
+
+The distinction between "cask" and "cask_management" is one of timing:
+the latter refers to the casks expected prior to the festival, adding
+any extra arrivals once the festival has started. The "cask" level
+simply refers to actual casks which have arrived.
 
 =back
 

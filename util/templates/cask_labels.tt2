@@ -2,7 +2,13 @@
 % $Id$
 %
 
-[% IF dump_class != 'cask' %][% THROW bad_dump_class "Use the cask dump class.\n" %][% END %]
+% Note - to compile this LaTeX with pdflatex you will likely need to use the following:
+%
+%   pdflatex -shell-escape <name of this file.tex>
+%
+% This activates "shell-escape" mode which is needed for barcode creation.
+
+[% IF dump_class != 'cask_management' %][% THROW bad_dump_class "Use the cask_management dump class.\n" %][% END %]
 
 \documentclass[a4paper,12pt]{article} 
 \usepackage[newdimens]{labels}
@@ -40,7 +46,7 @@
 \begin{document}% End of preamble
 
 \begin{labels}
-[% FOREACH cask = objects %]
+[% FOREACH cask = objects.sort('category', 'brewery', 'product') %]
 \begin{tabular}{ l l }
 \multirow{5}{*}{
 [% IF cask.festival_id.defined -%]

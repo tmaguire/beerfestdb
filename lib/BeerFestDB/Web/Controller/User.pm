@@ -23,8 +23,9 @@ package BeerFestDB::Web::Controller::User;
 use Moose;
 use namespace::autoclean;
 
-use Digest;
+use Crypt::SaltedHash;
 use List::Util qw(first);
+use JSON::MaybeXS;
 
 BEGIN {extends 'BeerFestDB::Web::Controller'; }
 
@@ -124,15 +125,19 @@ sub build_database_object : Private {
 
     my ( $self, $rec, $c, @other ) = @_;
 
-    # FIXME this overridden method needs to hash any $rec->password
-    # field before passing it back to the superclass method. Note that
-    # we'd also like to salt these hashes FIXME.
-    
-#    if ( my $pw = $rec->{'password'} ) {
-#        my $ctx = Digest->new('SHA-1');
-#        $ctx->add( $pw );
-#        $rec->{'password'} = ctx->hexdigest();
-#    }
+    # This overridden method needs to hash any $rec->password
+    # field before passing it back to the superclass method.
+    my $pw = $rec->{'password'};
+    if ( defined $pw ) {
+        if ( $pw eq q{} ) {
+            delete $rec->{'password'}; # no empty passwords
+        }
+        else {
+            my $csh = Crypt::SaltedHash->new(algorithm => 'SHA-1');
+            $csh->add($pw);
+            $rec->{'password'} = $csh->generate();
+        }
+    }
 
     # Our regular build_database_object method doesn't handle many-to-many.
     my $roles = delete $rec->{'roles'};
@@ -181,14 +186,16 @@ sub load_form : Local {
     $self->form_json_and_detach( $c, $rs, $pk );
 }
 
-# FIXME this is just a vague outline at the moment.
+# FIXME this is just a vague outline at the moment. It's intended as a
+# means for a given user to be able to edit their own account
+# (e.g. change password).
 sub modify : Local {
 
     my ( $self, $c ) = @_;
 
     # Quick check for authorisation; we may need to put in other
     # checks for content FIXME.
-    my $j = JSON::Any->new;
+    my $j = JSON->new;
     my $data = $j->jsonToObj( $c->request->param( 'changes' ) );
 
     foreach my $rec ( @{ $data } ) {
@@ -200,6 +207,16 @@ sub modify : Local {
 
     # Pass-through to submit action for the moment FIXME?
     $self->submit( $c );
+}
+
+sub generate_object_viewhash : Private {
+
+    my ( $self, $obj ) = @_;
+
+    # Don't publish the SHA-1 password hash; just leave it blank.
+    my $obj_info = $self->next::method( $obj );
+    delete $obj_info->{'password'};
+    return $obj_info;
 }
 
 sub viewhash_from_model : Private {

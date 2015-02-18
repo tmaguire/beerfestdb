@@ -25,7 +25,7 @@ use inc::Module::Install;
 name 'BeerFestDB-Web';
 all_from 'lib/BeerFestDB/Web.pm';
 
-requires 'Catalyst::Runtime' => '5.7015';
+requires 'Catalyst::Runtime' => '5.90015';
 requires 'Catalyst::Plugin::ConfigLoader';
 requires 'Catalyst::Plugin::Static::Simple';
 requires 'Catalyst::Plugin::Session::Store::FastMmap';
@@ -35,24 +35,29 @@ requires 'Catalyst::Plugin::Authorization::Roles'         => '0.05';
 requires 'Catalyst::Authentication::Store::DBIx::Class'   => '0.104';
 requires 'Digest::SHA1'                                   => '2.11';
 requires 'Crypt::SaltedHash'                              => '0.06';
-requires 'Catalyst::Engine::HTTP::Restarter';
 requires 'Catalyst::Action::RenderView';
+requires 'Catalyst::Plugin::Unicode::Encoding';
 requires 'parent';
 requires 'Config::YAML';
 
 requires 'Catalyst::View::JSON';
-requires 'JSON::DWIW';
+requires 'JSON::MaybeXS';
 requires 'Catalyst::View::TT';
 requires 'DBIx::Class';
 requires 'Moose';
 requires 'Readonly';
 requires 'Text::CSV_XS';
 requires 'Template';
+requires 'DateTime::TimeZone';  # Timestamps for upload to public web site.
 
 requires 'LWP';
 requires 'HTTP::Cookies';
 requires 'Term::ReadLine';
 requires 'Term::ReadKey';
+
+recommends 'YAML::XS';  # YAML::Syck is deprecated.
+recommends 'DateTime';  # CBF-specific web site upload script.
+recommends 'JSON::XS';  # Seems to work a bit more reliably than JSON::PP in this context.
 
 recommends 'OpenOffice::OODoc';
 

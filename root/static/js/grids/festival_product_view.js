@@ -173,22 +173,25 @@ Ext.onReady(function(){
         url:        url_cask_list,
         root:       'objects',
         fields:     [{ name: 'cask_id',           type: 'int' },
+                     { name: 'cask_management_id', type: 'int' },
                      { name: 'festival_id',       type: 'int' },
                      { name: 'gyle_id',           type: 'int' },
                      { name: 'distributor_id',    type: 'int' },
-                     { name: 'order_batch_id',    type: 'int' },
+                     { name: 'order_batch_name',  type: 'string' },
                      { name: 'container_size_id', type: 'int' },
                      { name: 'currency_id',       type: 'int' },
                      { name: 'price',             type: 'int' },
                      { name: 'int_reference',     type: 'string' },
                      { name: 'ext_reference',     type: 'string' },
                      { name: 'festival_ref',      type: 'string' },
+                     { name: 'is_condemned',      type: 'int' },
                      { name: 'is_sale_or_return', type: 'int' },
                      { name: 'comment',           type: 'string' }],
         sortInfo:   {
             field:     'int_reference',
             direction: 'ASC',
         },
+        defaultData: { currency_id: default_currency },
     });
     cask_store.load();
 
@@ -312,7 +315,7 @@ Ext.onReady(function(){
                   })},
             ],
             viewLink: function (grid, record, action, row, col) {
-                var t = new Ext.XTemplate('/gyle/view/{gyle_id}');
+                var t = new Ext.XTemplate(url_base + 'gyle/view/{gyle_id}');
                 window.location=t.apply({
                     gyle_id: record.get('gyle_id'),
                 })
@@ -331,6 +334,8 @@ Ext.onReady(function(){
             recordChanges:      function (record) {
                 var fields = record.getChanges();
                 fields.cask_id = record.get( 'cask_id' );
+                fields.cask_management_id = record.get( 'cask_management_id' );
+                fields.currency_id = record.get( 'currency_id' );
                 fields.festival_id = festival_id;
                 fields.product_id  = product_id;
                 return(fields);
@@ -396,21 +401,29 @@ Ext.onReady(function(){
 		  renderer:   MyCheckboxRenderer(),
 		  editor:     new Ext.form.Checkbox()
 		},
-                { id:         'order_batch_id',
+                { id:         'order_batch_name',
                   header:     'Order Batch',
-                  dataIndex:  'order_batch_id',
+                  dataIndex:  'order_batch_name',
                   width:      130,
-                  renderer:   MyComboRenderer(order_batch_combo),
-                  editor:     order_batch_combo, },
+                  editor:     new Ext.form.TextField({
+                      readOnly: true,
+                  })},
                 { id:        'comment',
                   header:    'Comment',
                   dataIndex: 'comment',
                   editor:     new Ext.form.TextField({
                       allowBlank: true,
                   })},
+                { id:         'is_condemned',
+                  header:     'Condemned',
+                  dataIndex:  'is_condemned',
+                  width:      50,
+                  renderer:   MyCheckboxRenderer(),
+                  editor:     new Ext.form.Checkbox({
+                  })},
             ],
             viewLink: function (grid, record, action, row, col) {
-                var t = new Ext.XTemplate('/cask/view/{cask_id}');
+                var t = new Ext.XTemplate(url_base + 'cask/view/{cask_id}');
                 window.location=t.apply({
                     cask_id: record.get('cask_id'),
                 })
@@ -439,7 +452,7 @@ Ext.onReady(function(){
         items: tabpanel,
         tbar:
         [
-            { text: 'Home', handler: function() { window.location = '/'; } },
+            { text: 'Home', handler: function() { window.location = url_base; } },
             { text: 'Festival', handler: function() { window.location = url_festival_view; } },
             { text: 'Product', handler: function() { window.location = url_product_view; } },
         ],

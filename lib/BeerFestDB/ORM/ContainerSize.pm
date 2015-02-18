@@ -80,11 +80,16 @@ __PACKAGE__->set_primary_key("container_size_id");
 
 =item * L</container_volume>
 
+=item * L</container_measure_id>
+
 =back
 
 =cut
 
-__PACKAGE__->add_unique_constraint("container_volume", ["container_volume"]);
+__PACKAGE__->add_unique_constraint(
+  "container_volume",
+  ["container_volume", "container_measure_id"],
+);
 
 =head2 C<description>
 
@@ -100,19 +105,19 @@ __PACKAGE__->add_unique_constraint("description", ["description"]);
 
 =head1 RELATIONS
 
-=head2 casks
+=head2 cask_managements
 
 Type: has_many
 
-Related object: L<BeerFestDB::ORM::Cask>
+Related object: L<BeerFestDB::ORM::CaskManagement>
 
 =cut
 
 __PACKAGE__->has_many(
-  "casks",
-  "BeerFestDB::ORM::Cask",
+  "cask_managements",
+  "BeerFestDB::ORM::CaskManagement",
   { "foreign.container_size_id" => "self.container_size_id" },
-  {},
+  undef,
 );
 
 =head2 container_measure_id
@@ -141,12 +146,12 @@ __PACKAGE__->has_many(
   "product_orders",
   "BeerFestDB::ORM::ProductOrder",
   { "foreign.container_size_id" => "self.container_size_id" },
-  {},
+  undef,
 );
 
 
-# Created by DBIx::Class::Schema::Loader v0.07015 @ 2012-03-22 16:57:01
-# DO NOT MODIFY THIS OR ANYTHING ABOVE! md5sum:GswPmWE59w5RdJYPvspuLQ
+# Created by DBIx::Class::Schema::Loader v0.07039 @ 2014-07-20 17:33:21
+# DO NOT MODIFY THIS OR ANYTHING ABOVE! md5sum:U6n+NopBfYepZFbZgevO8Q
 
 
 # You can replace this text with custom content, and it will be preserved on regeneration

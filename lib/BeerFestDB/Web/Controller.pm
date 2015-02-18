@@ -25,6 +25,9 @@ use namespace::autoclean;
 
 use List::Util qw(first);
 use Carp;
+use utf8;
+use Encode;
+use JSON::MaybeXS;
 
 BEGIN {extends 'Catalyst::Controller'; }
 
@@ -49,22 +52,45 @@ Passed a resultset object, maps it onto the view JSON objects and detaches.
 
 =cut
 
+sub raise_exception : Private {
+
+    my ( $self, $c, $message ) = @_;
+
+    $c->error($message);
+
+    die($message);
+}
+
 sub generate_json_and_detach : Private {
 
     my ( $self, $c, $rs ) = @_;
 
+    my @objects;
+    while ( my $obj = $rs->next ) {
+        push @objects, $self->generate_object_viewhash($obj);
+    }
+
+    $c->stash->{ 'success' } = JSON->true();
+    $c->stash->{ 'objects' } = \@objects;
+    $c->forward( 'View::JSON' );
+}
+
+sub generate_object_viewhash : Private {
+
+    my ( $self, $obj ) = @_;
+
     # Maps View onto Model columns.
     my %mv_map = %{ $self->model_view_map() };
 
-    my @objects;
-    while ( my $obj = $rs->next ) {
-        my %obj_info = map { $_ => $self->viewhash_from_model($_, $obj) } keys %mv_map;
-        push @objects, \%obj_info;
+    my %obj_info;
+    foreach my $key ( keys %mv_map ) {
+        my $value = $self->viewhash_from_model($key, $obj);
+        if ( defined $value ) {
+            $obj_info{ $key } = $value;
+        }
     }
 
-    $c->stash->{ 'success' } = JSON::Any->true();
-    $c->stash->{ 'objects' } = \@objects;
-    $c->detach( $c->view( 'JSON' ) );
+    return \%obj_info;
 }
 
 =head2 form_json_and_detach
@@ -81,24 +107,20 @@ sub form_json_and_detach : Private {
         my $obj = $rs->find({ $pk => $id });
 
         if ( $obj ) {
-            my %mv_map = %{ $self->model_view_map() };
-
-            my %obj_hash = map { $_ => $self->viewhash_from_model($_, $obj) } keys %mv_map;
-
-            $c->stash->{ 'data' } = \%obj_hash;
-            $c->stash->{ 'success' } = JSON::Any->true();
+            $c->stash->{ 'data' } = $self->generate_object_viewhash( $obj );
+            $c->stash->{ 'success' } = JSON->true();
         }
         else {
-            $c->stash->{ 'success' } = JSON::Any->false();
+            $c->stash->{ 'success' } = JSON->false();
             $c->stash->{ 'error' } = qq{Error: Unable to find $pk "$id".};
         }
     }
     else {
-        $c->stash->{ 'success' } = JSON::Any->false();
+        $c->stash->{ 'success' } = JSON->false();
         $c->stash->{ 'error' } = "Error: $pk is not defined.";
     }
 
-    $c->detach( $c->view( 'JSON' ) );
+    $c->forward( 'View::JSON' );
 
     return;
 }
@@ -109,6 +131,10 @@ sub viewhash_from_model : Private {
     # model_view_map), to retrieve the appropriate model attribute
     # from a DBIx::Class::Row object.
     my ( $self, $view_key, $dbrow, $lookup ) = @_;
+
+    unless ( defined $dbrow ) {
+        return;
+    }
 
     $lookup ||= $self->model_view_map()->{ $view_key } || $view_key;
 
@@ -129,7 +155,7 @@ sub viewhash_from_model : Private {
                         . " relationships are not supported.");
         }
         elsif ( scalar @children < 1 ) {
-            confess("Error: model_view_map contains empty hashrefs.");
+            return;
         }
         return $children[0];
     }
@@ -138,40 +164,106 @@ sub viewhash_from_model : Private {
     }
 }
 
-sub build_database_object : Private {
+sub _get_product_category : Private {
 
-    my ( $self, $rec, $c, $rs, $mv_map, $no_update ) = @_;
+    my ( $self, $c, $dbobj, $null_okay ) = @_;
 
-    foreach my $key ( keys %$rec ) {
-        delete $rec->{$key}
-            unless $self->value_is_acceptable( $rec->{$key} );
+    # Sometimes we will be passed a null object during subsequent
+    # recursion; e.g. into orphaned CaskManagement objects.
+    if ( ! $dbobj ) {
+        return if $null_okay; # Only CaskManagement for the moment.
+        $self->raise_exception($c, "Unable to track object back to product_category.\n");
     }
 
-    # Passed a JSON record nested hashref, Catalyst context and the
-    # appropriate DBIC::ResultSet object, create database objects
-    # recursively (depth first).
-    $mv_map ||= $self->model_view_map();
+    my $result_source = $dbobj->result_source();
+    my $rs            = $result_source->resultset();
+    my $classname     = $result_source->source_name();
 
-    # Firstly, find or create our top-level object. Don't insert a new
-    # object yet, since it won't have all the requisite information.
-    my %dbobj_info;
-    my @primary_cols = $rs->result_source()->primary_columns();
-    foreach my $pk ( @primary_cols ) {
-        my $value = $rec->{ $pk };
-        if ( defined $value ) {
-            $dbobj_info{ $pk } = $value;
+    $c->log->debug("Tracking product_category for $classname object...");
+
+    # FIXME note that this may be rather too heavy on DB queries,
+    # especially for large lists of updates.
+    my %catmap = (
+        'Product'         => sub { $_[0]->product_category_id() },
+        'FestivalProduct' => sub { $self->_get_product_category( $c, $_[0]->product_id ) },
+        'Gyle'            => sub { $self->_get_product_category( $c, $_[0]->festival_product_id ) },
+        'Cask'            => sub { $self->_get_product_category( $c, $_[0]->gyle_id ) },
+        'CaskMeasurement' => sub { $self->_get_product_category( $c, $_[0]->cask_id ) },
+        'ProductOrder'    => sub { $self->_get_product_category( $c, $_[0]->product_id ) },
+        'CaskManagement'  => sub { $self->_get_product_category( $c, $_[0]->casks->first() ||
+                                                                     $_[0]->product_order_id, 1 ) },
+    );
+
+    if ( my $fun = $catmap{ $classname } ) {
+        return $fun->($dbobj);
+    }
+    else {
+        $self->raise_exception($c, qq{Product category retrieval mapping not implemented for "$classname" objects.\n});
+    }
+}
+
+sub _confirm_category_authorisation : Private {
+
+    my ($self, $c, $dbobj) = @_;
+
+    if ( ! $c->user ) {
+        $self->raise_exception($c, "Error: user not logged in. How could this happen?!\n");
+    }
+
+    # Admin users get all the privs.
+    return if $c->check_any_user_role('admin');
+
+    my $classname = $dbobj->result_source()->source_name();
+
+    # Make sure this list matches the keys of %catmap, above.
+    if ( first { $_ eq $classname } qw( Product FestivalProduct Gyle
+                                        Cask ProductOrder CaskManagement
+                                        CaskMeasurement  ) ) {
+
+        my $pcat    = $self->_get_product_category($c, $dbobj);
+
+        # Creation of new CaskManagements has to occur in the absence
+        # of any link to product_category.
+        return if ( ! defined $pcat && $classname eq 'CaskManagement' );
+
+        my $pcat_id = $pcat->get_column('product_category_id');
+
+        # Test that pcat is in $c->user's roles->categories.
+        my $found = $c->user->search_related('user_roles')
+                            ->search_related('role_id')
+                            ->search_related('category_auths',
+                                             { product_category_id => $pcat_id })
+                            ->count();
+
+        if ( ! $found ) {
+            $self->raise_exception($c,
+                                   sprintf(qq{You do not have authorisation to}
+                                         . qq{ make changes to the "%s" category.\n},
+                                           $pcat->description))
         }
     }
-    my $dbobj = $rs->find_or_new( \%dbobj_info );
+    else {
+
+        # If it's anything else, the user needs to be an admin.
+        if ( ! $c->check_any_user_role('manager') ) {
+            $self->raise_exception($c,
+                                   "Attempting to edit an object which requires"
+                                   . " manager or admin privileges\n");
+        }
+    }
+}
+
+sub _add_object_column_attributes : Private {
+
+    my ( $self, $dbobj, $rec, $primary_cols, $mv_map ) = @_;
 
     my @hashrefs;
     
-    # Secondly, deal with simple table-based attributes.
     VIEW_KEY:
     foreach my $view_key (keys %$rec) {
 
         # Skip primary columns; we've already dealt with them.
-        next VIEW_KEY if ( first { $view_key eq $_ } @primary_cols );
+        next VIEW_KEY if ( first { $view_key eq $_ } @$primary_cols );
 
         # There's a strong risk of key collision from an upper
         # recursion into this one here; to fix this, we have to manage
@@ -208,8 +300,14 @@ sub build_database_object : Private {
         }
     }
 
-    # Thirdly, we handle the relationships.
-    foreach my $view_key (@hashrefs) {
+    return \@hashrefs;
+}
+
+sub _add_object_relationships : Private {
+
+    my ( $self, $c, $rs, $dbobj, $rec, $hashrefs, $mv_map ) = @_;
+    
+    foreach my $view_key (@$hashrefs) {
 
         my $lookup ||= $mv_map->{ $view_key } || $view_key;
         
@@ -250,8 +348,11 @@ sub build_database_object : Private {
         }
         
         # Database updates are not done below here, for the sake of
-        # interface consistency.
-        my $value = $self->build_database_object( $next_rec, $c, $next_rs, $next_map, 1 );
+        # interface consistency. (FIXME we're currently reviewing
+        # this, hence 0 on next line; it may be that we need recursive
+        # updates for e.g. cask->cask_management and the interface is
+        # better controlled by using read-only fields).
+        my $value = $self->build_database_object( $next_rec, $c, $next_rs, $next_map, 0 );
         my @pks = $next_rs->result_source()->primary_columns();
         if ( scalar @pks != 1 ) {
             confess("Error: Unable to update relationship with table not having only one primary column.");
@@ -259,6 +360,45 @@ sub build_database_object : Private {
         my $pk = $pks[0];
         $dbobj->set_column( $rel, $value->$pk );
     }
+
+    return;
+}
+
+sub build_database_object : Private {
+
+    my ( $self, $rec, $c, $rs, $mv_map, $no_update ) = @_;
+
+    foreach my $key ( keys %$rec ) {
+        delete $rec->{$key}
+            unless $self->value_is_acceptable( $rec->{$key} );
+    }
+
+    # Passed a JSON record nested hashref, Catalyst context and the
+    # appropriate DBIC::ResultSet object, create database objects
+    # recursively (depth first).
+    $mv_map ||= $self->model_view_map();
+
+    # Firstly, find or create our top-level object. Don't insert a new
+    # object yet, since it won't have all the requisite information.
+    my %dbobj_info;
+    my @primary_cols = $rs->result_source()->primary_columns();
+    foreach my $pk ( @primary_cols ) {
+        my $value = $rec->{ $pk };
+        if ( defined $value ) {
+            $dbobj_info{ $pk } = $value;
+        }
+    }
+    my $dbobj = $rs->find_or_new( \%dbobj_info );
+
+    # Secondly, deal with simple table-based attributes.
+    my $hashrefs = $self->_add_object_column_attributes($dbobj, $rec, \@primary_cols, $mv_map);
+
+    # Thirdly, we handle the relationships.
+    $self->_add_object_relationships($c, $rs, $dbobj, $rec, $hashrefs, $mv_map);
+
+    # Note that this will raise an exception to derail the enclosing
+    # transaction if the user is not authorised to make changes.
+    $self->_confirm_category_authorisation($c, $dbobj) if $dbobj->is_changed();
 
     unless ( $no_update ) {
         eval {
@@ -285,7 +425,7 @@ sub build_database_object : Private {
 	    }
          
   	    # Called within a transaction, we die hard.
-	    die( $message . "\n" );
+	    $self->raise_exception( $c, $message . "\n" );
         }
     }
 
@@ -297,6 +437,21 @@ sub value_is_acceptable : Private {  # Required by DBHashRefValidator
     my ( $self, $value ) = @_;
 
     return 1;  # Undef values must be allowed if we want to break relationships.
+}
+
+sub decode_json_changes : Private {
+
+    my ( $self, $c ) = @_;
+ 
+    my $j = JSON::MaybeXS->new(utf8 => 1);
+    my $data;
+    eval { $data = $j->decode( encode('UTF-8', $c->request->param( 'changes' ) ) ) };
+    if ($@) {
+	$c->error("Unable to parse submitted JSON upload: $@");
+	$self->detach_with_txn_failure( $c );
+    }
+
+    return $data;
 }
 
 =head2 write_to_resultset
@@ -311,8 +466,7 @@ sub write_to_resultset : Private {
 
     my ( $self, $c, $rs ) = @_;
 
-    my $j = JSON::Any->new;
-    my $data = $j->jsonToObj( $c->request->param( 'changes' ) );
+    my $data = $self->decode_json_changes( $c );
 
     # Wrap everything in a transaction - all should pass, or none.
     eval {
@@ -324,12 +478,17 @@ sub write_to_resultset : Private {
             }
         );
     };
-    if ( $@ ) {
-        $self->detach_with_txn_failure( $c, $@ );
+    if ( $@ or scalar @{ $c->error } ) {
+        if ( ! scalar @{ $c->error } ) {
+
+            # Generate a log error if nothing is to be displayed in the web interface.
+            $c->log->error( $@ );
+        }
+        $self->detach_with_txn_failure( $c );
     };
 
-    $c->stash->{ 'success' } = JSON::Any->true();
-    $c->detach( $c->view( 'JSON' ) );
+    $c->stash->{ 'success' } = JSON->true();
+    $c->forward( 'View::JSON' );
 
     return;
 }
@@ -341,52 +500,63 @@ objects from the database.
 
 =cut
 
+sub delete_database_object : Private {
+
+    my ( $self, $c, $rec ) = @_;
+
+    eval {
+        $rec->delete();
+    };
+    if ($@) {
+        my $id    = join(",", $rec->id);
+        my $class = $rec->result_source->source_name();
+        $self->raise_exception($c, sprintf("Unable to delete %s object with ID=%s\n",
+                                           $class, $id));
+    }
+}
+
 sub delete_from_resultset : Private {
 
     my ( $self, $c, $rs ) = @_;
 
-    my $j = JSON::Any->new;
-    my $data = $j->jsonToObj( $c->request->param( 'changes' ) );
+    my $data = $self->decode_json_changes( $c );
 
     eval {
         $rs->result_source()->schema()->txn_do(
             sub {
                 foreach my $id ( @{ $data } ) {
                     my $rec = $rs->find($id);
-                    eval {
-                        $rec->delete() if $rec;
-                    };
-                    if ($@) {
-                        $c->log->error("DB transaction failure: $@");
-                        die(sprintf("Unable to delete %s object with ID=%s\n",
-                                    $rs->result_source->source_name(), $id));
-                    }
+                    $self->delete_database_object( $c, $rec ) if $rec;
                 }
             }
         );
     };
-    if ( $@ ) {
-        $self->detach_with_txn_failure( $c, $@ );
+    if ( $@ or scalar @{ $c->error } ) {
+        $self->detach_with_txn_failure( $c );
     };
 
-    $c->stash->{ 'success' } = JSON::Any->false();
-    $c->detach( $c->view( 'JSON' ) );
+    $c->stash->{ 'success' } = JSON->false();
+    $c->forward( 'View::JSON' );
 }
 
 sub detach_with_txn_failure : Private {
 
     my ( $self, $c, $error ) = @_;
 
+    $error ||= join("; ", @{ $c->error });
+
+    $c->clear_errors();
+
     $error =~ s/\A (.*) [\r\n]* \z/$1/xms;
 
-    $error = "Transaction failed: $error";
+    $error = "Database not changed: $error";
     $c->log->error($error);
     $c->response->status('403');  # Forbidden; must use this or
                                   # similar for ExtJS to detect
                                   # failure.
-    $c->stash->{ 'success' } = JSON::Any->false();
+    $c->stash->{ 'success' } = JSON->false();
     $c->stash->{ 'error' }   = $error;
-    $c->detach( $c->view( 'JSON' ) );    
+    $c->forward( 'View::JSON' );
 }
 
 =head2 get_default_currency
@@ -399,7 +569,7 @@ sub get_default_currency : Private {
 
     my $def = $c->model('DB::Currency')->find({
         currency_code => $c->config->{'default_currency'},
-    }) or die("Error retrieving default currency; check config settings.");
+    }) or $self->raise_exception($c, "Error retrieving default currency; check config settings.\n");
 
     $c->stash->{ 'default_currency' } = $def->currency_id();
 
@@ -416,7 +586,7 @@ sub get_default_sale_volume : Private {
 
     my $def = $c->model('DB::SaleVolume')->find({
         description => $c->config->{'default_sale_volume'},
-    }) or die("Error retrieving default sale volume; check config settings.");
+    }) or $self->raise_exception($c, "Error retrieving default sale volume; check config settings.\n");
 
     $c->stash->{ 'default_sale_volume' } = $def->sale_volume_id();
 
@@ -433,7 +603,7 @@ sub get_default_product_category : Private {
 
     my $def = $c->model('DB::ProductCategory')->find({
         description => $c->config->{'default_product_category'},
-    }) or die("Error retrieving default product_category; check config settings.");
+    }) or $self->raise_exception($c, "Error retrieving default product_category; check config settings.\n");
 
     $c->stash->{ 'default_product_category' } = $def->product_category_id();
 

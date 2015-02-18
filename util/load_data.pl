@@ -25,9 +25,9 @@ use warnings;
 
 use Getopt::Long;
 use Pod::Usage;
-use Config::YAML;
 
 use BeerFestDB::Loader;
+use BeerFestDB::Web;
 
 ########
 # SUBS #
@@ -35,12 +35,12 @@ use BeerFestDB::Loader;
 
 sub parse_args {
 
-    my ( $input, $conffile, $want_version, $want_help );
+    my ( $input, $overwrite, $want_version, $want_help );
 
     GetOptions(
-	"i|input=s"  => \$input,
-        "c|config=s" => \$conffile,
-        "h|help"     => \$want_help,
+	"i|input=s"   => \$input,
+	"o|overwrite" => \$overwrite,
+        "h|help"      => \$want_help,
     );
 
     if ($want_help) {
@@ -51,9 +51,7 @@ sub parse_args {
         );
     }
 
-    $conffile ||= 'beerfestdb_web.yml';
-
-    unless ( $input && $conffile ) {
+    unless ( $input ) {
         pod2usage(
             -message => qq{Please see "$0 -h" for further help notes.},
             -exitval => 255,
@@ -62,22 +60,31 @@ sub parse_args {
         );
     }
 
-    my $config = Config::YAML->new( config => $conffile );
+    my $config = BeerFestDB::Web->config();
 
-    return( $input, $config );
+    return( $input, $config, $overwrite );
 }
 
-my ( $input, $config ) = parse_args();
+my ( $input, $config, $overwrite ) = parse_args();
 
 ########
 # MAIN #
 ########
+
+if ( $overwrite ) {
+    print "Warning: you have asked to run the loader in 'overwrite' mode. Are you sure (y/N)? ";
+    chomp(my $answer = <STDIN>);
+    unless ( lc($answer) eq 'y' ) {
+	die("User canceled script execution.\n");
+    }
+}
 
 my $schema = BeerFestDB::ORM->connect( @{ $config->{'Model::DB'}{'connect_info'} } );
 
 my $loader = BeerFestDB::Loader->new(
     database  => $schema,
     protected => ( $config->{'protected_classes'} || [] ),
+    overwrite => $overwrite,
 );
 
 $loader->load( $input );
@@ -90,7 +97,7 @@ load_data.pl
 
 =head1 SYNOPSIS
 
- load_data.pl -i <input tab-delimited text file> -c <config file>
+ load_data.pl -i <input tab-delimited text file>
 
 =head1 DESCRIPTION
 
@@ -105,9 +112,9 @@ into the database. See L<BeerFestDB::Loader> for more information.
 
 The tab-delimited file to import.
 
-=item -c
+=item -o
 
-The main BeerFestDB web config file.
+Run the loader in overwrite mode. This is potentially dangerous.
 
 =back
 

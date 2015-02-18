@@ -116,6 +116,8 @@ Readonly my $BREWER_REGION             => 51;
 Readonly my $ORDER_SALE_OR_RETURN      => 52;
 Readonly my $BAY_NUMBER                => 53;
 Readonly my $BAY_POSITION              => 54;
+Readonly my $CASK_UNIT                 => 55;
+Readonly my $PRODUCT_LONG_DESCRIPTION       => 56;
 
 ########
 # SUBS #
@@ -153,6 +155,27 @@ sub _add_error_report_string {
     return;
 }
 
+sub _retrieve_reverse_dbkey {
+
+    my ( $self, $source, $key ) = @_;
+
+    # A slightly ugly method to figure out the correct column name on
+    # relationships where the source and target key names differ
+    # (e.g. sale_currency_id => currency_id).
+
+    my $relsource_info = $source->reverse_relationship_info( $key );
+    my $reldefs        = (values %$relsource_info)[0];
+    my $cond = $reldefs->{'cond'};
+    my $revkey;
+    while ( my ( $qkey, $qval ) = each %$cond ) {
+        if ($qkey eq "foreign.$key") {
+            $revkey = $qval;
+            $revkey =~ s/^self\.//;
+        }
+    }
+    return $revkey;
+}
+
 sub add_protection_error {
 
     my ( $self, $req_vals, $class ) = @_;
@@ -167,11 +190,10 @@ sub add_protection_error {
     foreach my $key ( keys %$req_vals ) {
         if ( $source->has_relationship( $key ) ) {
             my $relsource   = $source->related_source( $key );
-            my $rel         = $relsource->resultset->find({
-                $key => $req_vals->{$key}
-            });
+            my $revkey      = $self->_retrieve_reverse_dbkey( $source, $key );
+            my $rel         = $relsource->resultset->find({ $revkey => $req_vals->{$key} });
             my $related_rqd = $self->resultsource_required_columns($relsource);
-            my $relstr = join(";", map { $rel->get_column($_) } @$related_rqd);
+            my $relstr = join(";", map { $rel ? $rel->get_column($_) : "" } @$related_rqd);
             $key  =~ s/_id\z//xms;
             $err .= qq{        $key : $relstr\n};
         }
@@ -310,6 +332,7 @@ sub _load_data {
 		name             => $datahash->{$PRODUCT_NAME},
                 company_id       => $brewer->company_id,
 		description      => $datahash->{$PRODUCT_DESCRIPTION},
+		long_description => $datahash->{$PRODUCT_LONG_DESCRIPTION},
 		comment          => $datahash->{$PRODUCT_COMMENT},
                 product_category_id => $category,
                 product_style_id    => $style,
@@ -353,13 +376,14 @@ sub _load_data {
         : undef;
 
     # This is going to be pretty much constant for UK beers. Will need
-    # modification for European casks though FIXME.
-    my $cask_measure = $self->_load_column_value(
-        {
-            litre_multiplier => 4.54609188,
-            description      => 'gallon',
-        },
-        'ContainerMeasure');
+    # modification for European casks/wine/mead though. Note that
+    # 'gallon' will have been entered into the database as part of the
+    # initial set of controlled terms.
+    my $cask_unit = $self->value_is_acceptable( $datahash->{$CASK_UNIT} )
+        ? $datahash->{$CASK_UNIT} : 'gallon';
+    my $cask_measure = $self->database()->resultset('ContainerMeasure')
+        ->find({description => $cask_unit})
+            or die(qq{Unable to retrieve desired cask units "$cask_unit".});
 
     my $cask_size
         = $self->value_is_acceptable( $datahash->{$CASK_SIZE} )
@@ -464,7 +488,8 @@ sub _load_data {
         if ( $gyle && $festival ) { 
             $preexist = $gyle->search_related(
                 'casks',
-                { 'festival_id' => $festival->id })->count();
+                { 'cask_management_id.festival_id' => $festival->id },
+                { join => 'cask_management_id'} )->count();
             $count += $preexist;
         }
 
@@ -478,11 +503,15 @@ sub _load_data {
         
         foreach my $n ( @wanted_casks ) {
 
-            my $cask
+            # In the absence of product order data, cask_management
+            # has no link to product when it's initially created. This
+            # means we effectively have to create an orphaned cask_man
+            # and rely on the cask creation code within the same db
+            # transaction to reparent it.
+            my $cask_man
                 = ( $product && $festival )
                     ? $self->_load_column_value(
                         {
-                            gyle_id                => $gyle,
                             distributor_company_id => $distributor,
                             festival_id            => $festival,
                             container_size_id      => $cask_size,
@@ -492,9 +521,19 @@ sub _load_data {
                             stillage_bay           => $datahash->{$BAY_NUMBER},
                             bay_position_id        => $bay_position,
                             bar_id                 => $bar,
-                            comment                => $datahash->{$CASK_COMMENT},
                             internal_reference     => $n,
                             cellar_reference       => $datahash->{$CASK_FESTIVAL_ID},
+                        },
+                        'CaskManagement', 1) # 1 here forces creation of a new object.
+                        : undef;
+
+            my $cask
+                = ( $cask_man )
+                    ? $self->_load_column_value(
+                        {
+                            cask_management_id     => $cask_man,
+                            gyle_id                => $gyle,
+                            comment                => $datahash->{$CASK_COMMENT},
                         },
                         'Cask')
                         : undef;
@@ -571,7 +610,9 @@ sub _retrieve_obj_id {
 
 sub _load_column_value {
 
-    my ( $self, $args, $class, $trigger ) = @_;
+    my ( $self, $args, $class, $force_create ) = @_;
+
+    my $create_method = $force_create ? 'create' : 'find_or_create';
 
     my $resultset = $self->database()->resultset($class)
 	or confess(qq{Error: No result set returned from DB for class "$class".});
@@ -594,7 +635,7 @@ sub _load_column_value {
     # technically optional, still confers identity when it is
     # present. The altenative seems to be to make this NOT NULL in the
     # database, which is further than I want to go.
-    if ( $class eq 'Cask' && exists $args->{'cellar_reference'} ) {
+    if ( $class eq 'CaskManagement' && exists $args->{'cellar_reference'} ) {
         push @$required, 'cellar_reference';
         @$optional = grep { $_ ne 'cellar_reference' } @$optional;
     }
@@ -610,14 +651,14 @@ sub _load_column_value {
         if ( scalar @objects == 1 ) {
             $object = $objects[0];
         }
-        elsif ( scalar @objects == 0 ) {
+        elsif ( scalar @objects == 0 or $force_create ) {
 
             # Add an error, but create the object anyway *within the
             # transaction which will be rolled back*. This is a cheap
             # way of testloading and generating a full report on all
             # errors.
             $self->add_protection_error( \%req, $class );
-            $object = $resultset->find_or_create(\%req);
+            $object = $resultset->$create_method(\%req);
         }
         else {  # This is bad - it indicates a class which is not
                 # uniquely defined by its required attributes.
@@ -627,7 +668,7 @@ sub _load_column_value {
     else {
 
         # Regular class; find and/or create as necessary.
-        $object = $resultset->find_or_create(\%req);
+        $object = $resultset->$create_method(\%req);
     }
 
     # Update optional columns, e.g. description on Product.
@@ -659,6 +700,15 @@ sub _load_column_value {
         if ( ! defined $old || $old =~ /\A \s* \z/xms || $self->overwrite() ) {
             $object->set_column( $col, $value ) if defined $value;
         }
+
+	# Don't discard data silently!!!
+	if ( ( ! $self->overwrite() ) && ( defined $old && $old =~ /\S/xms )
+	     && defined $value && $value ne $old ) {
+	    warn(
+		sprintf(
+		    qq{WARNING: Will not overwrite old data with new}
+		    . qq{ (consider overwrite mode?):\nOLD: %s\nNEW: %s\n\n}, $old, $value))
+	}
     }
     $object->update();
 
@@ -687,6 +737,7 @@ sub _coerce_headings {
         qr/product [_ -]* name/ixms                    => $PRODUCT_NAME,
         qr/product [_ -]* style/ixms                   => $PRODUCT_STYLE,
         qr/product [_ -]* description/ixms             => $PRODUCT_DESCRIPTION,
+        qr/product [_ -]* long [_ -]* description/ixms => $PRODUCT_LONG_DESCRIPTION,
         qr/product [_ -]* comment/ixms                 => $PRODUCT_COMMENT,
         qr/product [_ -]* abv/ixms                     => $PRODUCT_ABV,
         qr/gyle [_ -]* brewery? [_ -]* number/ixms     => $GYLE_BREWERY_NUMBER,
@@ -702,6 +753,7 @@ sub _coerce_headings {
         qr/cask [_ -]* festival [_ -]* id/ixms         => $CASK_FESTIVAL_ID,
         qr/cask [_ -]* count/ixms                      => $CASK_COUNT,
         qr/cask [_ -]* size/ixms                       => $CASK_SIZE,
+        qr/cask [_ -]* unit/ixms                       => $CASK_UNIT,
         qr/cask [_ -]* price/ixms                      => $CASK_PRICE,
         qr/cask [_ -]* comment/ixms                    => $CASK_COMMENT,
         qr/cask [_ -]* measurement [_ -]* date/ixms    => $CASK_MEASUREMENT_DATE,

@@ -22,6 +22,7 @@
 package BeerFestDB::Web::Controller::Root;
 use Moose;
 use namespace::autoclean;
+use JSON::MaybeXS;
 
 BEGIN {extends 'Catalyst::Controller'; }
 
@@ -62,8 +63,28 @@ they're not permitted. This is called by the Authorization::ACL plugin.
 
 sub access_denied : Private {
     my ( $self, $c, $action ) = @_;
+
     $c->res->status('403');
-    $c->stash->{template} = 'denied.tt2';
+
+    if (!$c->user_exists) {
+
+	# Handle cases where we're not running at server root
+	# (e.g. behind a reverse proxy).
+	my $base = $c->config->{ 'base_path' };
+	my $uri  = $c->req->uri;
+	if ( defined $base ) {
+	    $uri->path($base . $uri->path);
+	}
+
+        # Set up the post-login destination URI.
+        $c->flash->{url_success_target} = '' . $uri;
+
+        # Redirect the user to the login page.
+        $c->res->redirect( $c->uri_for('/login') );
+    }
+    else {
+        $c->stash->{template} = 'denied.tt2';
+    }
 }
 
 =head2 index
@@ -83,26 +104,38 @@ sub login : Global {
 
     my ( $self, $c ) = @_;
 
-    my $j = JSON::Any->new;
+    # Not sure why this works; possibly it's circumventing the reset
+    # of user session, or maybe some Authorization::ACL oddness?
+    # N.B. currently this forgets the target if the user hits reload
+    # on the web page. FIXME?
+    $c->stash->{'url_success_target'}
+        = $c->flash->{'url_success_target'} || '' . $c->uri_for('/');
+
+    my $j = JSON->new;
     my $json_req = $c->request->param( 'data' );
+
+    $c->res->status('403');
 
     return unless $json_req;
 
-    my $data = $j->jsonToObj( $json_req );
+    my $data = $j->decode( $json_req );
 
     if ( $c->authenticate({ username => $data->{ 'username' },
                             password => $data->{ 'password' }, }) ) {
 
-        $c->res->redirect($c->uri_for('/'));  ## FIXME allow pass-through from prior location.
-        $c->stash->{ 'success' } = JSON::Any->true();
-        $c->detach( $c->view( 'JSON' ) );
+        # ExtJS form redirects to url_success_target URI.
+	$c->res->status('200');
+        $c->stash->{ 'success' } = JSON->true();
+        $c->forward( 'View::JSON' );
     }
     else {
         $c->res->status('401');
         $c->stash->{ 'message' } = 'Login failed.';
-        $c->stash->{ 'success' } = JSON::Any->false();
-        $c->detach( $c->view( 'JSON' ) );
+        $c->stash->{ 'success' } = JSON->false();
+        $c->forward( 'View::JSON' );
     }
+
+    return;
 }
 
 =head2 logout
@@ -119,8 +152,25 @@ sub logout : Global {
     $c->logout;
 
     $c->flash->{ 'message' } = 'Successfully logged out.';
-    $c->stash->{ 'success' } = JSON::Any->true();
+    $c->stash->{ 'success' } = JSON->true();
     $c->res->redirect( $c->uri_for('/') );
+}
+
+sub auto : Private {
+
+    my ($self, $c) = @_;
+
+    # Prepend all uri_for paths so that this works under a reverse proxy.
+    my $base = $c->config->{ 'base_path' };
+    if ( defined $base ) {
+	my $uri = $c->req->base;
+	$uri->path($base);
+	$c->req->base($uri);
+	$c->stash->{'base_path'} = $base;
+    }
+
+    # Return true to continue processing.
+    return 1;
 }
 
 =head2 end

@@ -82,19 +82,19 @@ __PACKAGE__->add_unique_constraint("festival_id", ["festival_id", "description"]
 
 =head1 RELATIONS
 
-=head2 casks
+=head2 cask_managements
 
 Type: has_many
 
-Related object: L<BeerFestDB::ORM::Cask>
+Related object: L<BeerFestDB::ORM::CaskManagement>
 
 =cut
 
 __PACKAGE__->has_many(
-  "casks",
-  "BeerFestDB::ORM::Cask",
+  "cask_managements",
+  "BeerFestDB::ORM::CaskManagement",
   { "foreign.stillage_location_id" => "self.stillage_location_id" },
-  {},
+  undef,
 );
 
 =head2 festival_id
@@ -112,8 +112,8 @@ __PACKAGE__->belongs_to(
 );
 
 
-# Created by DBIx::Class::Schema::Loader v0.07015 @ 2012-03-22 16:57:01
-# DO NOT MODIFY THIS OR ANYTHING ABOVE! md5sum:lJ89jiykvBd2cbgPzykuFw
+# Created by DBIx::Class::Schema::Loader v0.07039 @ 2014-07-20 17:33:21
+# DO NOT MODIFY THIS OR ANYTHING ABOVE! md5sum:LnVsenzG2vl1oQI9aXE2ug
 
 
 # You can replace this text with custom content, and it will be preserved on regeneration
